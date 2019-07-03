@@ -1,14 +1,27 @@
 #!/usr/bin/env python
 # -*- coding: UTF8 -*-
+import asyncio
+import datetime
+import math
 import argparse
 import socket
 import sys
 import os
 import traceback
 import copy
-import pygame
-from pygame import gfxdraw
-import math
+
+import aio_msgpack_rpc
+
+import contextlib
+
+with contextlib.redirect_stdout(None):
+    import pygame
+    from pygame import gfxdraw
+
+from .config import MSGPACK_AGENTS, MSGPACK_NAME, MSGPACK_TYPE, MSGPACK_TEAM, MSGPACK_HEALTH, MSGPACK_AMMO, \
+    MSGPACK_IS_CARRYING, MSGPACK_POSITION, MSGPACK_HEADING, MSGPACK_PACKS
+
+rpc_port = 18002
 
 objective_x = -1
 objective_y = -1
@@ -27,7 +40,6 @@ maps_path = None
 
 iteration = 0
 
-
 tile_size = 24
 horizontal_tiles = 32
 vertical_tiles = 32
@@ -38,8 +50,7 @@ map_height = tile_size * vertical_tiles
 xdesp = 0
 ydesp = 0
 
-
-def agl_parse(data):
+'''def agl_parse(data):
     global allied_base
     global axis_base
     global objective_x
@@ -48,34 +59,65 @@ def agl_parse(data):
     global dins
 
     dins = {}
-    #f.write("\nAGL_PARSE\n")
+    # f.write("\nAGL_PARSE\n")
     agl = data.split()
     nagents = int(agl[1])
     agl = agl[2:]
     separator = nagents * 15
-    #f.write("NAGENTS = %s\n" % (str(nagents)))
+    # f.write("NAGENTS = %s\n" % (str(nagents)))
     agent_data = agl[:separator]
     din_data = agl[separator:]
-    #f.write("AGENT_DATA:" + str(agent_data))
+    # f.write("AGENT_DATA:" + str(agent_data))
     for i in range(nagents):
-        agents[agent_data[0]] = {"type": agent_data[1], "team": agent_data[2], "health": agent_data[3], "ammo": agent_data[4], "carrying": agent_data[5], "posx": agent_data[6].strip(
-            "(,)"), "posy": agent_data[7].strip("(,)"), "posz": agent_data[8].strip("(,)"), "angx": agent_data[12].strip("(,)"), "angy": agent_data[13].strip("(,)"), "angz": agent_data[14].strip("(,)")}
-        #f.write("AGENT " + str(agents[agent_data[0]]))
+        agents[agent_data[0]] = {"type": agent_data[1], "team": agent_data[2], "health": agent_data[3],
+                                 "ammo": agent_data[4], "carrying": agent_data[5], "posx": agent_data[6].strip(
+                "(,)"), "posy": agent_data[7].strip("(,)"), "posz": agent_data[8].strip("(,)"),
+                                 "angx": agent_data[12].strip("(,)"), "angy": agent_data[13].strip("(,)"),
+                                 "angz": agent_data[14].strip("(,)")}
+        # f.write("AGENT " + str(agents[agent_data[0]]))
         agent_data = agent_data[15:]
 
-    #f.write("DIN_DATA:" + str(din_data))
+    # f.write("DIN_DATA:" + str(din_data))
     ndin = int(din_data[0])
-    #f.write("NDIN = %s\n" % (str(ndin)))
+    # f.write("NDIN = %s\n" % (str(ndin)))
     din_data = din_data[1:]
     for din in range(ndin):
         dins[din_data[0]] = {"type": din_data[1], "posx": din_data[2].strip("(,)"), "posy": din_data[3].strip("(,)"),
                              "posz": din_data[4].strip("(,)")}
-        #f.write("DIN " + str(dins[din_data[0]]))
+        # f.write("DIN " + str(dins[din_data[0]]))
         din_data = din_data[5:]
+'''
+
+
+def msgpack_parse(data):
+    global agents
+    global dins
+    if len(data) == 0:
+        return
+    for agent_data in data[MSGPACK_AGENTS]:
+        agents[str(agent_data[MSGPACK_NAME])] = {
+            "type": agent_data[MSGPACK_TYPE],
+            "team": agent_data[MSGPACK_TEAM],
+            "health": agent_data[MSGPACK_HEALTH],
+            "ammo": agent_data[MSGPACK_AMMO],
+            "carrying": agent_data[MSGPACK_IS_CARRYING],
+            "posx": agent_data[MSGPACK_POSITION][0],
+            "posy": agent_data[MSGPACK_POSITION][1],
+            "posz": agent_data[MSGPACK_POSITION][2],
+            "angx": agent_data[MSGPACK_HEADING][0],
+            "angy": agent_data[MSGPACK_HEADING][1],
+            "angz": agent_data[MSGPACK_HEADING][2]
+        }
+    for din_data in data[MSGPACK_PACKS]:
+        dins[din_data[MSGPACK_NAME]] = {
+            "type": din_data[MSGPACK_TYPE],
+            "posx": din_data[MSGPACK_POSITION][0],
+            "posy": din_data[MSGPACK_POSITION][1],
+            "posz": din_data[MSGPACK_POSITION][2],
+        }
 
 
 def draw2():
-
     global agents
     global factor
     global xdesp
@@ -111,7 +153,8 @@ def draw2():
         for x in range(0, 32):
             try:
                 if list(graph.items())[y][1][x] == '*':
-                    pygame.draw.rect(screen, color_wall, (x * tile_size + xdesp, y * tile_size + ydesp, tile_size, tile_size))
+                    pygame.draw.rect(screen, color_wall,
+                                     (x * tile_size + xdesp, y * tile_size + ydesp, tile_size, tile_size))
             except:
                 pass
 
@@ -269,18 +312,18 @@ def loadMap(map_name):
             l = line.split()
             objective_x = copy.copy(int(l[1]))
             objective_y = copy.copy(int(l[2]))
-            #f.write("OBJECTIVE:" + str(objective_x) + " " + str(objective_y))
+            # f.write("OBJECTIVE:" + str(objective_x) + " " + str(objective_y))
         elif "pGomas_SPAWN_ALLIED" in line:
             l = line.split()
             l.pop(0)
             allied_base = copy.copy(l)
-            #f.write("ALLIED_BASE:" + str(l))
+            # f.write("ALLIED_BASE:" + str(l))
         elif "pGomas_SPAWN_AXIS" in line:
             l = line.split()
             l.pop(0)
             axis_base = copy.copy(l)
     mapf.close()
-    #f.write("MAPF LOADED\n")
+    # f.write("MAPF LOADED\n")
 
     y = 0
     for line in cost.readlines():
@@ -288,7 +331,7 @@ def loadMap(map_name):
         y += 1
     cost.close()
     # print "GRAPH",str(graph)
-    #f.write(str(graph))
+    # f.write(str(graph))
 
 
 def main(address="localhost", port=8001, maps=None):
@@ -296,11 +339,12 @@ def main(address="localhost", port=8001, maps=None):
     global screen
     global font
     global maps_path
+    global rpc_port
 
     # Main
     maps_path = maps
     f = open("/tmp/tv.log", "w")
-    #f.write("LOG\n")
+    # f.write("LOG\n")
 
     # Init pygame
     pygame.init()
@@ -316,8 +360,8 @@ def main(address="localhost", port=8001, maps=None):
 
     try:
         # Init socket
-        #f.write("ADDRESS: %s\n" % address)
-        #f.write("PORT: %s\n" % (str(port)))
+        # f.write("ADDRESS: %s\n" % address)
+        # f.write("PORT: %s\n" % (str(port)))
         s = None
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if s:
@@ -325,57 +369,99 @@ def main(address="localhost", port=8001, maps=None):
             s.connect((address, port))
             rfile = s.makefile('r', -1)
             wfile = s.makefile('w', 20)
-            #f.write(f"SOCKET OPEN {str(s)}\n")
+            # f.write(f"SOCKET OPEN {str(s)}\n")
             data = rfile.readline()
-            #f.write(f"Server sent: {data}\n")
+            # f.write(f"Server sent: {data}\n")
 
-            wfile.write("READY\n")
+            wfile.write("READYv2\n")
             wfile.close()
-            in_loop = True
-            while in_loop:
-                data = ""
-                data = rfile.readline()
-                #f.write(f"Server sent: {data}\n")
-                if "COM" in data[0:5]:
-                    if "Accepted" in data:
-                        pass
-                    elif "Closed" in data:
-                        in_loop = False
-                elif "MAP" in data[0:5]:
-                    #f.write(f'MAP MESSAGE: {data}\n')
-                    p = data.split()
-                    mapname = p[2]
-                    #f.write(f"MAPNAME: {mapname}\n")
-                    loadMap(mapname)
-                elif "AGL" in data[0:5]:
-                    #f.write("\nAGL\n")
-                    #import datetime
-                    #print("{}: Received msg".format(datetime.datetime.now()))
-                    agl_parse(data)
-                elif "TIM" in data[0:5]:
-                    pass
-                elif "ERR" in data[0:5]:
-                    pass
-                else:
-                    # Unknown message type
-                    pass
-                draw2()
 
-            # Close socket
-            del rfile
-            del wfile
-            s.close()
+            data = ""
+            data = rfile.readline()
+            print("GOT DATA", data)
+            assert "COM" in data[0:5]
+            assert "Accepted" in data
 
+            data = rfile.readline()
+            assert "MAP" in data[0:5]
+
+            data = rfile.readline()
+            assert "COM" in data[0:5]
+            assert "READYv2" in data
+            rpc_port = int(data.split()[2])
+            print("GOT READYv2 with port " + str(rpc_port))
+
+            asyncio.get_event_loop().run_until_complete(main_loop(address, rpc_port))
+
+            print("Finished main_loop")
+
+        s.close()
     except Exception as e:
         print("Exception", str(e))
         print('-' * 60)
         traceback.print_exc(file=sys.stdout)
         print('-' * 60)
 
-
     finally:
         pygame.quit()
         f.close()
+
+
+async def main_loop(address, port):
+    in_loop = True
+    try:
+        client = aio_msgpack_rpc.Client(*await asyncio.open_connection(address, port))
+        print("Got RPC client", client)
+        mapname = await client.call("get_map")
+        print("Got RPC mapname", mapname)
+        loadMap(mapname)
+
+        while in_loop:
+            t1 = datetime.datetime.now()
+            data = await client.call("get_data")
+            msgpack_parse(data)
+            draw2()
+            t2 = datetime.datetime.now()
+            wait = (t2 - t1).seconds
+            if wait < 0.033:
+                await asyncio.sleep(0.033 - wait)
+    except Exception as e:
+        print("Async Exception", str(e))
+        print('-' * 60)
+        traceback.print_exc(file=sys.stdout)
+        print('-' * 60)
+
+        '''
+        data = ""
+        data = rfile.readline()
+        # f.write(f"Server sent: {data}\n")
+        if "COM" in data[0:5]:
+            if "Accepted" in data:
+                pass
+            elif "Closed" in data:
+                in_loop = False
+        elif "MAP" in data[0:5]:
+            # f.write(f'MAP MESSAGE: {data}\n')
+            p = data.split()
+            mapname = p[2]
+            # f.write(f"MAPNAME: {mapname}\n")
+            loadMap(mapname)
+        elif "AGL" in data[0:5]:
+            # f.write("\nAGL\n")
+            # import datetime
+            # print("{}: Received msg".format(datetime.datetime.now()))
+            # agl_parse(data)
+            unpacker = msgpack.Unpacker(rfile, raw=False)
+            for unpacked in unpacker:
+                msgpack_parse(unpacked)
+        elif "TIM" in data[0:5]:
+            pass
+        elif "ERR" in data[0:5]:
+            pass
+        else:
+            # Unknown message type
+            pass
+        '''
 
 
 if __name__ == "__main__":
@@ -387,4 +473,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(args.ip, args.port, args.maps)
     sys.exit(0)
-

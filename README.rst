@@ -16,7 +16,7 @@ pygomas
 
 
 
-Apython capture the flag Game Oriented Multiagent System.[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D
+A python "Capture the flag" Game Oriented Multiagent System.
 
 
 * Free software: GNU General Public License v3

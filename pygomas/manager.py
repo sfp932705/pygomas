@@ -3,8 +3,8 @@ import datetime
 import json
 import time
 import math
-from collections import defaultdict
 
+import msgpack
 from loguru import logger
 
 import spade
@@ -20,9 +20,10 @@ from .mobile import Mobile
 from .vector import Vector3D
 from .pack import PACK_NAME, PACK_NONE, PACK_OBJPACK, PACK_MEDICPACK, PACK_AMMOPACK
 from .agent import AbstractAgent, LONG_RECEIVE_WAIT
-from .config import Config
+from .config import Config, MSGPACK_AGENTS, MSGPACK_PACKS, MSGPACK_NAME, MSGPACK_TYPE, MSGPACK_TEAM, MSGPACK_HEALTH, \
+    MSGPACK_AMMO, MSGPACK_IS_CARRYING, MSGPACK_POSITION, MSGPACK_VELOCITY, MSGPACK_HEADING
 from .service import Service
-from .server import Server, TCP_AGL, TCP_COM
+from .server import Server, TCP_AGL, TCP_COM, RPCServer
 from .bditroop import CLASS_SOLDIER
 from .objpack import ObjectivePack
 from .map import TerrainMap
@@ -103,6 +104,7 @@ class Manager(AbstractAgent, Agent):
         self.objective_agent = None
         self.service_agent = Service(jid=self.service_jid, password=service_passwd)
         self.render_server = Server(map_name=self.map_name, port=self.port)
+        self.rpc_server = RPCServer(map_name=self.map_name, port=self.port + 1)
         self.din_objects = dict()
         self.map = TerrainMap()
 
@@ -179,6 +181,7 @@ class Manager(AbstractAgent, Agent):
         self.register_service(MANAGEMENT_SERVICE)
 
         self.render_server.start()
+        self.rpc_server.start()
 
         self.map.load_map(self.map_name, self.config)
 
@@ -210,49 +213,74 @@ class Manager(AbstractAgent, Agent):
             async def run(self):
                 try:
                     if self.agent.render_server and self.agent.render_server.get_connections() is not {}:
-
-                        msg = "" + str(self.agent.number_of_agents) + " "
-                        for agent in self.agent.agents.values():
-                            msg += agent.jid.split("@")[0] + " "
-                            msg += str(agent.type) + " "
-                            msg += str(agent.team) + " "
-
-                            msg += str(agent.health) + " "
-                            msg += str(agent.ammo) + " "
-                            if agent.is_carrying_objective:
-                                msg += str(1)
-                            else:
-                                msg += str(0)
-
-                            msg += " (" + str(agent.locate.position.x) + ", "
-                            msg += str(agent.locate.position.y) + ", "
-                            msg += str(agent.locate.position.z) + ") "
-
-                            msg += "(" + str(agent.locate.velocity.x) + ", "
-                            msg += str(agent.locate.velocity.y) + ", "
-                            msg += str(agent.locate.velocity.z) + ") "
-
-                            msg += "(" + str(agent.locate.heading.x) + ", "
-                            msg += str(agent.locate.heading.y) + ", "
-                            msg += str(agent.locate.heading.z) + ") "
-
-                        num_din_objects = sum([not din.is_taken for din in self.agent.din_objects.values()])
-                        msg += str(num_din_objects) + " "
-
-                        for din_object in self.agent.din_objects.values():
-                            if not din_object.is_taken:
-                                msg += str(din_object.render_id) + " "
-                                msg += str(din_object.type) + " "
-                                msg += " (" + str(din_object.position.x) + ", "
-                                msg += str(din_object.position.y) + ", "
-                                msg += str(din_object.position.z) + ") "
-
+                        # v1
                         for task in self.agent.render_server.get_connections():
-                            if self.agent.render_server.is_ready(task):
-                                self.agent.render_server.send_msg_to_render_engine(task, TCP_AGL, msg)
-                                #logger.info("msg to render engine")
+                            msg = self.__prepare_message_v1()
+                            self.agent.render_server.send_msg_to_render_engine(task, TCP_AGL, msg)
+                            # logger.info("msg to render engine")
+                        # v2
+                    msg = self.__prepare_message_v2()
+                    self.agent.rpc_server.update(msg)
+                    # logger.info("msg to render engine")
                 except Exception:
                     pass
+
+            def __prepare_message_v2(self):
+                msg = {
+                    MSGPACK_AGENTS: [{
+                        MSGPACK_NAME: agent.jid.split("@")[0],
+                        MSGPACK_TYPE: agent.type,
+                        MSGPACK_TEAM: agent.team,
+                        MSGPACK_HEALTH: agent.health,
+                        MSGPACK_AMMO: agent.ammo,
+                        MSGPACK_IS_CARRYING: agent.is_carrying_objective,
+                        MSGPACK_POSITION: (agent.locate.position.x, agent.locate.position.y, agent.locate.position.z),
+                        MSGPACK_VELOCITY: (agent.locate.velocity.x, agent.locate.velocity.y, agent.locate.velocity.z),
+                        MSGPACK_HEADING: (agent.locate.heading.x, agent.locate.heading.y, agent.locate.heading.z),
+                    } for agent in self.agent.agents.values()],
+                    MSGPACK_PACKS: [{
+                        MSGPACK_NAME: din_object.render_id,
+                        MSGPACK_TYPE: din_object.type,
+                        MSGPACK_POSITION: (din_object.position.x, din_object.position.y, din_object.position.z)}
+                        for din_object in self.agent.din_objects.values() if not din_object.is_taken]}
+
+                return msgpack.packb(msg)
+
+            def __prepare_message_v1(self):
+                msg = "" + str(self.agent.number_of_agents) + " "
+                for agent in self.agent.agents.values():
+                    msg += agent.jid.split("@")[0] + " "
+                    msg += str(agent.type) + " "
+                    msg += str(agent.team) + " "
+
+                    msg += str(agent.health) + " "
+                    msg += str(agent.ammo) + " "
+                    if agent.is_carrying_objective:
+                        msg += str(1)
+                    else:
+                        msg += str(0)
+
+                    msg += " (" + str(agent.locate.position.x) + ", "
+                    msg += str(agent.locate.position.y) + ", "
+                    msg += str(agent.locate.position.z) + ") "
+
+                    msg += "(" + str(agent.locate.velocity.x) + ", "
+                    msg += str(agent.locate.velocity.y) + ", "
+                    msg += str(agent.locate.velocity.z) + ") "
+
+                    msg += "(" + str(agent.locate.heading.x) + ", "
+                    msg += str(agent.locate.heading.y) + ", "
+                    msg += str(agent.locate.heading.z) + ") "
+                num_din_objects = sum([not din.is_taken for din in self.agent.din_objects.values()])
+                msg += str(num_din_objects) + " "
+                for din_object in self.agent.din_objects.values():
+                    if not din_object.is_taken:
+                        msg += str(din_object.render_id) + " "
+                        msg += str(din_object.type) + " "
+                        msg += " (" + str(din_object.position.x) + ", "
+                        msg += str(din_object.position.y) + ", "
+                        msg += str(din_object.position.z) + ") "
+                return msg
 
         self.add_behaviour(InformRenderEngineBehaviour(self.fps))
 
@@ -261,17 +289,17 @@ class Manager(AbstractAgent, Agent):
         class DataFromTroopBehaviour(CyclicBehaviour):
             async def run(self):
                 try:
-                    #buffer = defaultdict(list)
-                    #while self.mailbox_size() > 0:
+                    # buffer = defaultdict(list)
+                    # while self.mailbox_size() > 0:
                     #    msg = await self.receive(timeout=0)
                     #    content = json.loads(msg.body)
                     #    buffer[content[NAME]].append(content)
                     msg = await self.receive(timeout=LONG_RECEIVE_WAIT)
                     if self.mailbox_size() > self.agent.max_total_agents + 1:
                         logger.error("TOO MUCH PENDING MSG: {}".format(self.mailbox_size()))
-                    #for id_agent, msgs in buffer.items():
+                    # for id_agent, msgs in buffer.items():
                     if msg:
-                    #    for content in msgs:
+                        #    for content in msgs:
                         content = json.loads(msg.body)
                         id_agent = content[NAME]
                         self.agent.agents[id_agent].locate.position.x = int(content[X])
@@ -454,7 +482,7 @@ class Manager(AbstractAgent, Agent):
                     logger.success("\n\nManager:  GAME FINISHED!! Winner Team: AXIS!\n")
                     await self.agent.inform_game_finished("AXIS!", self)
 
-        self.add_behaviour(CheckAlliedHealthBehaviour(20*self.fps))
+        self.add_behaviour(CheckAlliedHealthBehaviour(20 * self.fps))
 
     async def check_objects_at_step(self, id_agent, behaviour):
 

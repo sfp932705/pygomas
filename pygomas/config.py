@@ -93,6 +93,19 @@ THRESHOLD_SHOTS: str = "threshold_shots"
 VELOCITY: str = "velocity"
 
 
+MSGPACK_AGENTS: int = 10
+MSGPACK_PACKS: int = 11
+MSGPACK_NAME: int = 12
+MSGPACK_TYPE: int = 13
+MSGPACK_TEAM: int = 14
+MSGPACK_HEALTH: int = 15
+MSGPACK_AMMO: int = 16
+MSGPACK_IS_CARRYING: int = 17
+MSGPACK_POSITION: int = 18
+MSGPACK_VELOCITY: int = 19
+MSGPACK_HEADING: int = 20
+
+
 class Config(object):
     def __init__(self, data_path=None):
         self.data_path = data_path if data_path else DEFAULT_DATA_PATH
